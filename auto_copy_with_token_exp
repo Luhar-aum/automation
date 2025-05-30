@@ -1,0 +1,309 @@
+import os
+import time
+import logging
+import shutil
+import zipfile
+import dropbox
+from dropbox.files import SharedLink
+from dropbox.files import FileMetadata, FolderMetadata
+from datetime import datetime, timedelta
+import pytz
+import requests
+from dropbox.files import ListFolderArg
+
+
+
+
+# === CONFIG ===
+LOCAL_BASE_DIR = 'downloaded_dropbox'
+CHECK_INTERVAL = 1  # seconds
+
+
+APP_KEY = 'l8exkn0byj25u27'
+APP_SECRET = 'zg6jezgg42cwuez'
+
+
+# From your JSON token info (save these after initial OAuth flow)
+REFRESH_TOKEN = "5jqd6S1W1D8AAAAAAAAAAU5bMngNi3WjRZqyU2d1Dr4J8B6uui6UC-ulQHWwr2s_"
+SHARED_LINK_URL = 'https://www.dropbox.com/scl/fo/pabt32xxzlddnt2zv5ubb/AIqGQDnm7GnF7e-WCEb_rPo?rlkey=nxebp23z122xd7bmmc4qgpqqs&st=tf5tz4dg&dl=0'
+
+
+# Timezone and run duration
+IST = pytz.timezone('Asia/Kolkata')
+START_TIME = datetime.now(IST)
+RUN_DURATION = timedelta(minutes=5)
+END_TIME = START_TIME + RUN_DURATION
+
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+
+# Global variables to hold token state
+access_token = None
+token_expiry = 0
+dbx = None
+
+
+
+
+def refresh_access_token():
+    global access_token, token_expiry, dbx
+
+
+    logger.info("🔄 Refreshing Dropbox access token...")
+    token_url = 'https://api.dropbox.com/oauth2/token'
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    data = {
+        'grant_type': 'refresh_token',
+        'refresh_token': REFRESH_TOKEN,
+        'client_id': APP_KEY,
+        'client_secret': APP_SECRET,
+    }
+    response = requests.post(token_url,headers=headers, data=data)
+
+
+    if response.status_code != 200:
+        logger.error(f"❌ Failed to refresh token: {response.status_code} - {response.text}")
+        response.raise_for_status()
+
+
+    token_data = response.json()
+
+
+    access_token = token_data['access_token']
+
+
+    # expires_in = token_data.get('expires_in', 14400)  
+    # token_expiry = time.time() + expires_in - 60  # refresh 1 minute early
+    fixed_expires_in = 60  # 2 minutes
+    token_expiry = time.time() + fixed_expires_in - 10 
+
+
+    dbx = dropbox.Dropbox(access_token)
+    logger.info(f"✅ Access token refreshed, expires in {fixed_expires_in} seconds.")
+    logger.info(f"{access_token}")
+
+
+
+
+
+def refresh_if_needed():
+    global token_expiry
+    if time.time() > token_expiry:
+        refresh_access_token()
+
+
+def ensure_dir(path):
+    os.makedirs(path, exist_ok=True)
+
+
+def list_file_paths(shared_link_url, remote_path=''):
+    refresh_if_needed()
+    file_paths = []
+
+
+    try:
+        result = dbx.files_list_folder(path=remote_path, shared_link=SharedLink(url=shared_link_url))
+    except Exception as e:
+        logger.error(f"❌ Error listing folder {remote_path}: {e}")
+        return file_paths
+
+
+    for entry in result.entries:
+        entry_path = "/" + os.path.join(remote_path, entry.name).replace("\\", "/").lstrip("/")
+
+        if isinstance(entry, FileMetadata):
+            file_paths.append({
+                'path': entry_path,
+                'client_modified': entry.client_modified.astimezone(IST)
+            })
+        elif isinstance(entry, FolderMetadata):
+            file_paths += list_file_paths(shared_link_url, entry_path)
+
+    return sorted(file_paths, key=lambda x: x['path'])        
+
+def filter_today_files(file_entries):
+    today = datetime.now(IST).date()
+    return [f for f in file_entries if f['client_modified'].date() == today]
+
+
+
+def download_file(shared_link_url, dropbox_path, local_path):
+    refresh_if_needed()
+    ensure_dir(os.path.dirname(local_path))
+    try:
+        metadata, response = dbx.sharing_get_shared_link_file(url=shared_link_url, path=dropbox_path)
+        with open(local_path, 'wb') as f:
+            f.write(response.content)
+        logger.info(f"✅ Downloaded: {dropbox_path}")
+    except Exception as e:
+        logger.error(f"❌ Error downloading {dropbox_path}: {e}")
+
+
+def list_and_download(shared_link_url, remote_path='', local_dir=''):
+    refresh_if_needed()
+    try:
+        result = dbx.files_list_folder(path=remote_path, shared_link=SharedLink(url=shared_link_url))
+    except Exception as e:
+        logger.error(f"Failed to list folder: {remote_path}: {e}")
+        return
+
+
+    for entry in result.entries:
+        name = entry.name
+        if not name:
+            continue
+
+
+        entry_path = "/" + os.path.join(remote_path, name).replace("\\", "/").lstrip("/")
+        local_path = os.path.join(local_dir, entry_path.lstrip("/"))
+
+
+        if isinstance(entry, FileMetadata):
+            download_file(shared_link_url, entry_path, local_path)
+        elif isinstance(entry, FolderMetadata):
+            ensure_dir(local_path)
+            list_and_download(shared_link_url, entry_path, local_dir)
+
+
+
+
+def zip_folder(source_dir, zip_path):
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, _, files in os.walk(source_dir):
+            for file in files:
+                filepath = os.path.join(root, file)
+                arcname = os.path.relpath(filepath, source_dir)
+                zipf.write(filepath, arcname)
+    logger.info(f"📦 Zipped to {zip_path}")
+
+
+
+
+def wait_for_deletion(filepath):
+    logger.info(f"⏳ Waiting for deletion of: {filepath}")
+    while os.path.exists(filepath):
+        # this process should 10 minute
+        time.sleep(2)
+    logger.info(f"🗑️ File deleted: {filepath}")
+
+
+
+
+def copy_files_one_by_one(source_dir, dest_dir):
+    """
+    Copy each file from source_dir to dest_dir. Wait until the file is deleted before copying the next.
+    """
+    files = sorted(os.listdir(source_dir))
+    logger.info(f"📋 Preparing to copy {len(files)} files one-by-one...")
+
+
+    for filename in files:
+        src_file = os.path.join(source_dir, filename)
+        dest_file = os.path.join(dest_dir, filename)
+
+
+        if os.path.isfile(src_file):
+            logger.info(f"📤 Copying: {filename}")
+            shutil.copy2(src_file, dest_file)
+            logger.info(f"📂 Waiting for deletion of copied file: {filename}")
+            
+            # time.sleep(8) #waiting waiting
+            
+            # try:
+            #     os.remove(dest_file)
+            #     logger.info(f"deleted:{filename}")
+            # except Exception as e:
+            #     logger.error(f" Failed to delete {filename}: {e}")
+                
+            
+        
+            wait_for_deletion(dest_file)     #this is static right now
+
+
+
+
+if __name__ == '__main__':
+    try:
+        TARGET_DIR = os.path.join(os.path.expanduser("~"), "Documents")
+        ensure_dir(TARGET_DIR)
+
+        DOWNLOAD_TODAY_ONLY = True
+        LIST_ONLY = False 
+
+        downloaded_paths = set()
+        refresh_access_token()
+
+        logger.info("📂 Scanning for today's files...")
+        all_files = list_file_paths(SHARED_LINK_URL)
+
+        today = datetime.now(IST).date()
+        today_files = [f for f in all_files if f['client_modified'].date() == today]
+
+        if not today_files:
+            logger.info("📭 No files modified today found.")
+        else:
+            logger.info(f"📋 Found {len(today_files)} file(s) modified today:")
+            for f in today_files:
+                logger.info(f"📝 {f['path']} (modified: {f['client_modified']})")
+
+        if LIST_ONLY:
+            logger.info("📄 LIST_ONLY flag is enabled. Exiting after listing.")
+            exit(0)
+
+        previous_files = all_files
+        logger.info("🔁 Starting monitoring loop...")
+
+        while True:
+            now = datetime.now(IST)
+            if now >= END_TIME:
+                logger.warning("⏰ Run duration expired. Exiting.")
+                break
+
+            current_files = list_file_paths(SHARED_LINK_URL)
+            today = datetime.now(IST).date()
+            today_files = [f for f in current_files if f['client_modified'].date() == today]
+
+            new_today_files = [f for f in today_files if f['path'] not in downloaded_paths]
+
+            if new_today_files:
+                logger.info(f"📥 {len(new_today_files)} new file(s) found with today’s timestamp.")
+                # logger.info("⏳ Waiting 10 seconds for uploads to settle...")
+                # time.sleep(10)
+
+                current_files_after_delay = list_file_paths(SHARED_LINK_URL)
+                today_files_after_delay = [
+                    f for f in current_files_after_delay
+                    if f['client_modified'].date() == today and f['path'] not in downloaded_paths
+                ]
+
+                if today_files_after_delay:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    local_folder = f"{LOCAL_BASE_DIR}_{timestamp}"
+                    ensure_dir(local_folder)
+
+                    for file_entry in today_files_after_delay:
+                        dropbox_path = file_entry['path']
+                        local_path = os.path.join(local_folder, dropbox_path.lstrip("/"))
+                        download_file(SHARED_LINK_URL, dropbox_path, local_path)
+                        downloaded_paths.add(dropbox_path)
+
+                    zip_path = f"{local_folder}.zip"
+                    zip_folder(local_folder, zip_path)
+                    copy_files_one_by_one(local_folder, TARGET_DIR)
+
+                    logger.info("✅ New files processed. Monitoring continues...")
+                    exit(0)
+                else:
+                    logger.info("📭 No new stable files found after waiting.")
+            else:
+                logger.info("⏳ No new today-timestamped files detected, checking again...")
+
+            time.sleep(CHECK_INTERVAL)
+
+    except KeyboardInterrupt:
+        logger.info("🚪 User interrupted. Exiting.")
+
