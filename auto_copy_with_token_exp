@@ -19,13 +19,13 @@ LOCAL_BASE_DIR = 'downloaded_dropbox'
 CHECK_INTERVAL = 1  # seconds
 
 
-APP_KEY = 'l8exkn0byj25u27'
-APP_SECRET = 'zg6jezgg42cwuez'
+APP_KEY = ''
+APP_SECRET = ''
 
 
 # From your JSON token info (save these after initial OAuth flow)
-REFRESH_TOKEN = "5jqd6S1W1D8AAAAAAAAAAU5bMngNi3WjRZqyU2d1Dr4J8B6uui6UC-ulQHWwr2s_"
-SHARED_LINK_URL = 'https://www.dropbox.com/scl/fo/pabt32xxzlddnt2zv5ubb/AIqGQDnm7GnF7e-WCEb_rPo?rlkey=nxebp23z122xd7bmmc4qgpqqs&st=tf5tz4dg&dl=0'
+REFRESH_TOKEN = ""
+SHARED_LINK_URL = ''
 
 
 # Timezone and run duration
