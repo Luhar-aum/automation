@@ -51,7 +51,7 @@ def refresh_access_token():
     global access_token, token_expiry, dbx
 
 
-    logger.info("🔄 Refreshing Dropbox access token...")
+    logger.info(" Refreshing Dropbox access token...")
     token_url = 'https://api.dropbox.com/oauth2/token'
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -66,7 +66,7 @@ def refresh_access_token():
 
 
     if response.status_code != 200:
-        logger.error(f"❌ Failed to refresh token: {response.status_code} - {response.text}")
+        logger.error(f" Failed to refresh token: {response.status_code} - {response.text}")
         response.raise_for_status()
 
 
@@ -108,7 +108,7 @@ def list_file_paths(shared_link_url, remote_path=''):
     try:
         result = dbx.files_list_folder(path=remote_path, shared_link=SharedLink(url=shared_link_url))
     except Exception as e:
-        logger.error(f"❌ Error listing folder {remote_path}: {e}")
+        logger.error(f" Error listing folder {remote_path}: {e}")
         return file_paths
 
 
@@ -140,7 +140,7 @@ def download_file(shared_link_url, dropbox_path, local_path):
             f.write(response.content)
         logger.info(f"✅ Downloaded: {dropbox_path}")
     except Exception as e:
-        logger.error(f"❌ Error downloading {dropbox_path}: {e}")
+        logger.error(f" Error downloading {dropbox_path}: {e}")
 
 
 def list_and_download(shared_link_url, remote_path='', local_dir=''):
@@ -178,7 +178,7 @@ def zip_folder(source_dir, zip_path):
                 filepath = os.path.join(root, file)
                 arcname = os.path.relpath(filepath, source_dir)
                 zipf.write(filepath, arcname)
-    logger.info(f"📦 Zipped to {zip_path}")
+    logger.info(f" Zipped to {zip_path}")
 
 
 
@@ -209,7 +209,7 @@ def copy_files_one_by_one(source_dir, dest_dir):
         if os.path.isfile(src_file):
             logger.info(f"📤 Copying: {filename}")
             shutil.copy2(src_file, dest_file)
-            logger.info(f"📂 Waiting for deletion of copied file: {filename}")
+            logger.info(f" Waiting for deletion of copied file: {filename}")
             
             # time.sleep(8) #waiting waiting
             
@@ -237,7 +237,7 @@ if __name__ == '__main__':
         downloaded_paths = set()
         refresh_access_token()
 
-        logger.info("📂 Scanning for today's files...")
+        logger.info(" Scanning for today's files...")
         all_files = list_file_paths(SHARED_LINK_URL)
 
         today = datetime.now(IST).date()
@@ -255,7 +255,7 @@ if __name__ == '__main__':
             exit(0)
 
         previous_files = all_files
-        logger.info("🔁 Starting monitoring loop...")
+        logger.info(" Starting monitoring loop...")
 
         while True:
             now = datetime.now(IST)
@@ -270,7 +270,7 @@ if __name__ == '__main__':
             new_today_files = [f for f in today_files if f['path'] not in downloaded_paths]
 
             if new_today_files:
-                logger.info(f"📥 {len(new_today_files)} new file(s) found with today’s timestamp.")
+                logger.info(f" {len(new_today_files)} new file(s) found with today’s timestamp.")
                 # logger.info("⏳ Waiting 10 seconds for uploads to settle...")
                 # time.sleep(10)
 
@@ -295,15 +295,15 @@ if __name__ == '__main__':
                     zip_folder(local_folder, zip_path)
                     copy_files_one_by_one(local_folder, TARGET_DIR)
 
-                    logger.info("✅ New files processed. Monitoring continues...")
+                    logger.info(" New files processed. Monitoring continues...")
                     exit(0)
                 else:
-                    logger.info("📭 No new stable files found after waiting.")
+                    logger.info(" No new stable files found after waiting.")
             else:
                 logger.info("⏳ No new today-timestamped files detected, checking again...")
 
             time.sleep(CHECK_INTERVAL)
 
     except KeyboardInterrupt:
-        logger.info("🚪 User interrupted. Exiting.")
+        logger.info(" User interrupted. Exiting.")
 
